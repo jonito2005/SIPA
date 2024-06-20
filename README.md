@@ -1,5 +1,6 @@
 # SIPA
 Sistem Informasi Pembimbingan Akademik
+Source code ini merupakan fondasi dari Sistem Informasi Pembimbingan Akademik yang lengkap dan terintegrasi. Dikembangkan dengan bahasa pemrograman modern dan kerangka kerja yang andal, source code ini memungkinkan pengelolaan data mahasiswa, dosen pembimbing, jadwal bimbingan, catatan akademik, dan laporan kemajuan studi secara efisien dan akurat.
 
 Login Page
 ![image](https://github.com/jonito2005/SIPA/assets/160975920/0ebd7b4b-c83a-4973-a286-c4417cff6953)
