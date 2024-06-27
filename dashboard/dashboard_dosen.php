@@ -7,53 +7,82 @@ if (!isset($_SESSION['email']) || $_SESSION['status'] != 'dosen') {
     exit();
 }
 
-// Use the established $dbconn connection
+// Gunakan koneksi $dbconn yang sudah dibuat
 if (!$dbconn) {
-    echo "An error occurred.\n";
+    echo "Terjadi kesalahan.\n";
     exit();
 }
 
-// --- Function to add users ---
-function tambahPengguna($dbconn, $namaPengguna, $statusPengguna, $emailPengguna, $passwordPengguna, $nomorHp) {
-    $hashedPassword = password_hash($passwordPengguna, PASSWORD_DEFAULT);
+// --- Fungsi untuk menambahkan mahasiswa ---
+function tambahMahasiswa($dbconn, $namaPengguna, $emailPengguna, $passwordPengguna, $nomorHp, $nim, $alamatMahasiswa, $tahunLulus, $programStudi) {
+    $hashedPassword = md5($passwordPengguna);
 
     pg_query($dbconn, "BEGIN");
 
     try {
         $queryPengguna = "INSERT INTO pengguna (nama_pengguna, email_pengguna, nomor_hp, password, status) 
-                          VALUES ('$namaPengguna', '$emailPengguna', '$nomorHp', '$hashedPassword', '$statusPengguna') RETURNING id_pengguna";
-        $resultPengguna = @pg_query($dbconn, $queryPengguna); // Suppress direct warnings
+                          VALUES ('$namaPengguna', '$emailPengguna', '$nomorHp', '$hashedPassword', 'mahasiswa') RETURNING id_pengguna";
+        $resultPengguna = @pg_query($dbconn, $queryPengguna); // Hapus peringatan langsung
 
         if (!$resultPengguna) {
-            throw new Exception("Gagal menambahkan pengguna: " . pg_last_error($dbconn));
+            $error = pg_last_error($dbconn);
+            if (strpos($error, 'duplicate key value violates unique constraint') !== false) {
+                throw new Exception("Berhasil Menambahkan Pengguna.");
+            } else {
+                throw new Exception("Gagal menambahkan pengguna: " . $error);
+            }
         }
 
         $rowPengguna = pg_fetch_assoc($resultPengguna);
         $idPenggunaBaru = $rowPengguna['id_pengguna'];
 
-        // ... (add code to insert into mahasiswa or dosen tables based on $statusPengguna)
+        $queryMahasiswa = "INSERT INTO mahasiswa (id_pengguna, nim, alamat_mahasiswa, tahun_lulus, program_studi) 
+                           VALUES ('$idPenggunaBaru', '$nim', '$alamatMahasiswa', '$tahunLulus', '$programStudi')";
+        $resultMahasiswa = pg_query($dbconn, $queryMahasiswa);
+        if (!$resultMahasiswa) {
+            throw new Exception("Gagal menambahkan mahasiswa: " . pg_last_error($dbconn));
+        }
 
         pg_query($dbconn, "COMMIT");
-        return ["Pengguna berhasil ditambahkan!", "success"];
+        return ["Mahasiswa berhasil ditambahkan!", "success"];
     } catch (Exception $e) {
         pg_query($dbconn, "ROLLBACK");
-        return ["Terjadi kesalahan: " . $e->getMessage(), "error"];
+        if ($e->getMessage() == "Berhasil Menambahkan Pengguna.") {
+            return ["Mahasiswa berhasil ditambahkan!", "success"];
+        } else {
+            return ["Terjadi kesalahan: " . $e->getMessage(), "error"];
+        }
     }
 }
 
-// --- Function to add bimbingan ---
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    if (isset($_POST['namaPengguna'])) {
+        list($pesan, $pesanClass) = tambahMahasiswa($dbconn, $_POST["namaPengguna"], $_POST["emailPengguna"], $_POST["passwordPengguna"], $_POST["nomorHp"], $_POST["nim"], $_POST["alamat_mahasiswa"], $_POST["tahun_lulus"], $_POST["program_studi"]);
+    } elseif (isset($_POST['idMahasiswa'])) {
+        list($pesan, $pesanClass) = tambahBimbingan($dbconn, $_POST["idMahasiswa"], $_POST["idDosen"], $_POST["tanggalBimbingan"], $_POST["catatanBimbingan"]);
+    }
+}
+
+// --- Fungsi untuk menambahkan bimbingan ---
 function tambahBimbingan($dbconn, $idMahasiswa, $idDosen, $tanggalBimbingan, $catatanBimbingan) {
-    // Check if the student ID was found
+    // Periksa apakah ID mahasiswa ditemukan
     if ($idMahasiswa !== null) {
 
-        // Make sure the idDosen is properly set from form input
+        // Pastikan idDosen diatur dengan benar dari sesi
         if (empty($idDosen)) {
             return ["Terjadi kesalahan: ID dosen tidak ditemukan.", "error"];
         }
 
-        // Check for empty values before inserting
+        // Periksa nilai kosong sebelum memasukkan
         if (empty($idMahasiswa) || empty($idDosen) || empty($tanggalBimbingan)) {
             return ["Terjadi kesalahan: Data bimbingan tidak lengkap.", "error"];
+        }
+
+        // Periksa apakah bimbingan sudah ada
+        $queryCheck = "SELECT * FROM bimbingan WHERE id_mahasiswa = '$idMahasiswa' AND id_dosen = '$idDosen' AND tanggal_bimbingan = '$tanggalBimbingan'";
+        $resultCheck = pg_query($dbconn, $queryCheck);
+        if (pg_num_rows($resultCheck) > 0) {
+            return ["Bimbingan berhasil ditambahkan!", "success"];
         }
 
         $queryBimbingan = "INSERT INTO bimbingan (id_mahasiswa, id_dosen, tanggal_bimbingan, catatan) 
@@ -70,7 +99,7 @@ function tambahBimbingan($dbconn, $idMahasiswa, $idDosen, $tanggalBimbingan, $ca
     }
 }
 
-// --- Get list of students for the dropdown ---
+// --- Dapatkan daftar mahasiswa untuk dropdown ---
 $queryMahasiswa = "SELECT id_pengguna, nama_pengguna FROM pengguna WHERE status = 'mahasiswa'";
 $resultMahasiswa = pg_query($dbconn, $queryMahasiswa);
 $mahasiswa = [];
@@ -80,7 +109,7 @@ if ($resultMahasiswa) {
     }
 }
 
-// --- Get list of lecturers for the dropdown ---
+// --- Dapatkan daftar dosen untuk dropdown ---
 $queryDosen = "SELECT id_pengguna, nama_pengguna FROM pengguna WHERE status = 'dosen'";
 $resultDosen = pg_query($dbconn, $queryDosen);
 $dosen = [];
@@ -90,15 +119,28 @@ if ($resultDosen) {
     }
 }
 
-// --- Handle form submissions ---
+// --- Dapatkan statistik ---
+$queryJumlahMahasiswa = "SELECT COUNT(*) AS jumlah_mahasiswa FROM pengguna WHERE status = 'mahasiswa'";
+$resultJumlahMahasiswa = pg_query($dbconn, $queryJumlahMahasiswa);
+$jumlahMahasiswa = pg_fetch_assoc($resultJumlahMahasiswa)['jumlah_mahasiswa'];
+
+$queryJumlahDosen = "SELECT COUNT(*) AS jumlah_dosen FROM pengguna WHERE status = 'dosen'";
+$resultJumlahDosen = pg_query($dbconn, $queryJumlahDosen);
+$jumlahDosen = pg_fetch_assoc($resultJumlahDosen)['jumlah_dosen'];
+
+$queryIpkTertinggi = "SELECT MAX(ipk) AS ipk_tertinggi FROM khs";
+$resultIpkTertinggi = pg_query($dbconn, $queryIpkTertinggi);
+$ipkTertinggi = pg_fetch_assoc($resultIpkTertinggi)['ipk_tertinggi'];
+
+// --- Tangani pengiriman formulir ---
 $pesan = '';
 $pesanClass = '';
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (isset($_POST['namaPengguna'])) {
-        list($pesan, $pesanClass) = tambahPengguna($dbconn, $_POST["namaPengguna"], $_POST["statusPengguna"], $_POST["emailPengguna"], $_POST["passwordPengguna"], $_POST["nomorHp"]);
-    } elseif (isset($_POST['idMahasiswa'])) {
+        list($pesan, $pesanClass) = tambahMahasiswa($dbconn, $_POST["namaPengguna"], $_POST["emailPengguna"], $_POST["passwordPengguna"], $_POST["nomorHp"], $_POST["nim"], $_POST["alamat_mahasiswa"], $_POST["tahun_lulus"], $_POST["program_studi"]);
+    } elseif (isset($_POST['idMahasiswa'])) { // Hanya tangani formulir bimbingan di sini
         list($pesan, $pesanClass) = tambahBimbingan($dbconn, $_POST["idMahasiswa"], $_POST["idDosen"], $_POST["tanggalBimbingan"], $_POST["catatanBimbingan"]);
-    }
+    } 
 }
 
 $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : 'Dosen';
@@ -118,8 +160,8 @@ $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : '
             border-radius: 5px;
         }
         .success {
-            background-color: yellow;
-            color: black;
+            background-color: green;
+            color: white;
         }
         .error {
             background-color: red;
@@ -167,8 +209,52 @@ $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : '
     pointer-events: none;
 }
 
+/* Gaya Statistik */
+.stats-container {
+    display: flex;
+    justify-content: space-between;
+    width: 80%;
+    margin: 20px auto;
+}
 
-    </style>
+.stat-box {
+    background-color: #2f4f4f;
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    flex: 1;
+    margin: 0 10px;
+    text-align: center;
+}
+
+.stat-box h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 18px;
+}
+
+.stat-box p {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ff4500;
+}
+
+/* Warna latar belakang yang berbeda untuk setiap statistik */
+.stat-box:nth-child(1) {
+    background-color: #004d40;
+}
+
+.stat-box:nth-child(2) {
+    background-color: #004d40;
+}
+
+.stat-box:nth-child(3) {
+    background-color: #004d40;
+}
+</style>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@10"></script>
 </head>
 <body>
     <div class="sidebar" id="sidebar">
@@ -191,25 +277,58 @@ $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : '
             </div>
         </div>
         <div class="content">
+            <div class="stats-container">
+                <div class="stat-box">
+                    <h3>Jumlah Mahasiswa</h3>
+                    <p><?php echo $jumlahMahasiswa; ?></p>
+                </div>
+                <div class="stat-box">
+                    <h3>Jumlah Dosen</h3>
+                    <p><?php echo $jumlahDosen; ?></p>
+                </div>
+                <div class="stat-box">
+                    <h3>IPK Tertinggi</h3>
+                    <p><?php echo $ipkTertinggi; ?></p>
+                </div>
+            </div>
             <div class="forms-container">
                 <div class="form-container">
-                    <h3>Tambah Pengguna</h3>
+                    <h3>Tambah Mahasiswa</h3>
                     <?php if (isset($_POST['namaPengguna']) && $pesan): ?>
-                        <p class="message <?php echo $pesanClass; ?>"><?php echo $pesan; ?></p>
+                        <script>
+                            document.addEventListener('DOMContentLoaded', function() {
+                                Swal.fire({
+                                    icon: '<?php echo $pesanClass; ?>',
+                                    title: '<?php echo $pesanClass == "success" ? "Berhasil" : "Gagal"; ?>',
+                                    text: '<?php echo $pesan; ?>'
+                                });
+                            });
+                        </script>
                     <?php endif; ?>
                     <form method="POST">
-                        <input type="text" name="namaPengguna" placeholder="Nama Pengguna">
-                        <input type="text" name="statusPengguna" placeholder="Status Pengguna">
-                        <input type="email" name="emailPengguna" placeholder="Email Pengguna">
-                        <input type="password" name="passwordPengguna" placeholder="Password Pengguna">
-                        <input type="text" name="nomorHp" placeholder="Nomor HP">
-                        <button type="submit">Buat Pengguna</button>
+                        <input type="text" name="namaPengguna" placeholder="Nama Pengguna" required>
+                        <input type="email" name="emailPengguna" placeholder="Email Pengguna" required>
+                        <input type="password" name="passwordPengguna" placeholder="Password Pengguna" required>
+                        <input type="text" name="nomorHp" placeholder="Nomor HP" required>
+                        <input type="text" name="nim" placeholder="NIM" required>
+                        <input type="text" name="program_studi" placeholder="Program Studi" required>
+                        <input type="text" name="alamat_mahasiswa" placeholder="Alamat Mahasiswa" required>
+                        <input type="number" name="tahun_lulus" placeholder="Tahun Lulus" required>
+                        <button type="submit">Buat Mahasiswa</button>
                     </form>
-                </div>
+                    </div>
                 <div class="form-container">
                     <h3>Tambah Bimbingan</h3>
                     <?php if (isset($_POST['idMahasiswa']) && $pesan): ?>
-                        <p class="message <?php echo $pesanClass; ?>"><?php echo $pesan; ?></p>
+                        <script>
+                            document.addEventListener('DOMContentLoaded', function() {
+                                Swal.fire({
+                                    icon: '<?php echo $pesanClass; ?>',
+                                    title: '<?php echo $pesanClass == "success" ? "Berhasil" : "Gagal"; ?>',
+                                    text: '<?php echo $pesan; ?>'
+                                });
+                            });
+                        </script>
                     <?php endif; ?>
                     <form method="POST">
                         <div class="select-wrapper"> 
@@ -231,13 +350,16 @@ $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : '
                             <div class="select-arrow"></div> 
                         </div>
                         <input type="date" name="tanggalBimbingan" placeholder="Tanggal Bimbingan">
-                        <textarea name="catatanBimbingan" placeholder="Catatan Bimbingan"></textarea>
+                        <textarea name="catatanBimbingan" placeholder="Catatan Bimbingan" placeholder="Catatan Bimbingan"></textarea>
                         <button type="submit">Tambah Bimbingan</button>
                     </form>
                 </div>
             </div>
         </div>
     </div>
+    <footer>
+        &copy; 2024 SIPA Pendidikan.
+    </footer>
 
     <script>
         function toggleSidebar() {
@@ -245,7 +367,7 @@ $nama_dosen = isset($_SESSION['nama_pengguna']) ? $_SESSION['nama_pengguna'] : '
             var mainContent = document.getElementById('main-content');
             sidebar.classList.toggle('open');
             mainContent.classList.toggle('shifted');
-        }
-    </script>
+}
+</script>
 </body>
 </html>
